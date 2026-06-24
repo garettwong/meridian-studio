@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Meridian — Architecture Studio</title>
+<meta name="description" content="Meridian is an architecture and spatial design studio. Move your cursor — or drag a finger — to trace the light.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+
+<style>
+/* ============================================================
+   MERIDIAN — Architecture studio
+   Signature interaction: a glowing light trail follows the
+   cursor (desktop) or finger (touch) and fades. See <canvas>
+   engine at the bottom of the file.
+   ============================================================ */
+:root{
+  --ink:#0a0a0b;
+  --paper:#ECEAE3;
+  --muted:rgba(236,234,227,.56);
+  --faint:rgba(236,234,227,.32);
+  --line:rgba(236,234,227,.12);
+  --line-2:rgba(236,234,227,.24);
+  --amber:#ff9d3c;
+  --amber-soft:#ffcf9b;
+
+  --serif:'Cormorant Garamond', Georgia, 'Times New Roman', serif;
+  --sans:'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+
+  --pad:clamp(20px,5vw,64px);
+  --ease:cubic-bezier(.22,.61,.36,1);
+  --ease-out:cubic-bezier(.16,1,.3,1);
+}
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{
+  font-family:var(--sans);
+  color:var(--paper);
+  background:
+    radial-gradient(130% 90% at 72% -12%, #1b170f 0%, rgba(10,10,11,0) 52%),
+    radial-gradient(120% 80% at 8% 110%, #0f1316 0%, rgba(10,10,11,0) 50%),
+    var(--ink);
+  background-attachment:fixed;
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+body.is-locked{overflow:hidden}
+a{color:inherit;text-decoration:none}
+ul{list-style:none}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+img,svg{display:block;max-width:100%}
+::selection{background:rgba(255,157,60,.28)}
+
+:focus-visible{outline:2px solid var(--amber);outline-offset:4px;border-radius:2px}
+
+.eyebrow{
+  font-family:var(--sans); font-size:11px; font-weight:500;
+  letter-spacing:.32em; text-transform:uppercase; color:var(--faint);
+  display:inline-flex; align-items:center; gap:12px;
+}
+.eyebrow::before{content:""; width:7px; height:7px; border-radius:50%;
+  background:var(--amber); box-shadow:0 0 12px 2px rgba(255,157,60,.7)}
+
+/* ---- vignette + trail canvas layers ---- */
+.vignette{
+  position:fixed; inset:0; z-index:40; pointer-events:none;
+  background:radial-gradient(120% 100% at 50% 40%, rgba(0,0,0,0) 55%, rgba(0,0,0,.55) 100%);
+}
+#trail{position:fixed; inset:0; z-index:50; pointer-events:none}
+
+/* ============================================================
+   NAV
+   ============================================================ */
+.nav{
+  position:fixed; inset:0 0 auto 0; z-index:100;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:22px var(--pad);
+  border-bottom:1px solid transparent;
+  transition:background .5s var(--ease), backdrop-filter .5s var(--ease),
+             border-color .5s var(--ease), padding .5s var(--ease);
+}
+.nav.is-scrolled{
+  background:rgba(10,10,11,.6);
+  backdrop-filter:blur(18px) saturate(120%);
+  -webkit-backdrop-filter:blur(18px) saturate(120%);
+  border-bottom-color:var(--line);
+  padding-top:16px; padding-bottom:16px;
+}
+.brand{font-family:var(--serif); font-size:23px; font-weight:500;
+  letter-spacing:.42em; padding-left:.42em; line-height:1}
+.brand b{font-weight:600}
+.nav__links{display:flex; gap:clamp(20px,2.6vw,40px)}
+.nav__link{
+  position:relative; font-size:11.5px; font-weight:500;
+  letter-spacing:.2em; text-transform:uppercase; color:var(--muted);
+  padding:6px 1px; transition:color .35s var(--ease);
+}
+.nav__link::after{content:""; position:absolute; left:0; bottom:0; height:1px;
+  width:0; background:var(--amber-soft); transition:width .4s var(--ease)}
+.nav__link:hover, .nav__link:focus-visible{color:var(--paper)}
+.nav__link:hover::after, .nav__link:focus-visible::after{width:100%}
+.nav__cta{
+  font-size:11.5px; font-weight:500; letter-spacing:.2em; text-transform:uppercase;
+  padding:11px 20px; border:1px solid var(--line-2); border-radius:40px;
+  transition:border-color .35s var(--ease), background .35s var(--ease), color .35s var(--ease);
+}
+.nav__cta:hover{border-color:var(--amber-soft); background:rgba(255,157,60,.08)}
+
+.nav__toggle{display:none; width:44px; height:44px; position:relative; z-index:210; margin-right:-10px}
+.nav__toggle span{position:absolute; left:11px; right:11px; height:1.5px; background:var(--paper);
+  transition:transform .42s var(--ease), opacity .25s var(--ease), top .42s var(--ease)}
+.nav__toggle span:nth-child(1){top:17px}
+.nav__toggle span:nth-child(2){top:23px}
+.nav__toggle span:nth-child(3){top:29px}
+body.menu-open .nav__toggle span:nth-child(1){top:23px; transform:rotate(45deg)}
+body.menu-open .nav__toggle span:nth-child(2){opacity:0}
+body.menu-open .nav__toggle span:nth-child(3){top:23px; transform:rotate(-45deg)}
+
+.overlay{
+  position:fixed; inset:0; z-index:200; background:#08080a;
+  display:flex; flex-direction:column; justify-content:center; gap:2px;
+  padding:0 var(--pad); opacity:0; visibility:hidden;
+  transition:opacity .5s var(--ease), visibility .5s var(--ease);
+}
+body.menu-open .overlay{opacity:1; visibility:visible}
+.overlay a{
+  font-family:var(--serif); font-size:clamp(2.2rem,11vw,3.4rem); font-weight:400;
+  letter-spacing:.01em; padding:12px 0; border-bottom:1px solid var(--line);
+  color:var(--paper); transform:translateY(26px); opacity:0;
+  transition:transform .6s var(--ease-out), opacity .6s var(--ease-out), color .3s var(--ease);
+}
+.overlay a:hover{color:var(--amber-soft)}
+body.menu-open .overlay a{transform:none; opacity:1}
+body.menu-open .overlay a:nth-child(1){transition-delay:.10s}
+body.menu-open .overlay a:nth-child(2){transition-delay:.17s}
+body.menu-open .overlay a:nth-child(3){transition-delay:.24s}
+body.menu-open .overlay a:nth-child(4){transition-delay:.31s}
+body.menu-open .overlay a:nth-child(5){transition-delay:.38s}
+
+/* ============================================================
+   HERO
+   ============================================================ */
+.hero{
+  position:relative; min-height:100svh;
+  display:flex; flex-direction:column; justify-content:flex-end;
+  padding:140px var(--pad) clamp(30px,5vh,56px);
+}
+.hero__eyebrow{margin-bottom:clamp(22px,4vh,40px)}
+.hero__title{
+  font-family:var(--serif); font-weight:300;
+  font-size:clamp(3rem,10.5vw,9.5rem); line-height:.96; letter-spacing:-.012em;
+  max-width:15ch; text-wrap:balance;
+}
+.hero__title em{font-style:italic; font-weight:400; color:var(--amber-soft)}
+.hero__row{
+  display:flex; align-items:flex-end; justify-content:space-between;
+  gap:40px; flex-wrap:wrap; margin-top:clamp(28px,5vh,52px);
+}
+.hero__lead{
+  font-size:clamp(14px,1.5vw,16px); font-weight:300; color:var(--muted);
+  max-width:46ch; line-height:1.75;
+}
+.hint{display:flex; align-items:center; gap:14px; color:var(--faint);
+  font-size:11px; letter-spacing:.16em; text-transform:uppercase; white-space:nowrap}
+.hint__dot{position:relative; width:34px; height:34px; flex:0 0 auto}
+.hint__dot::before{content:""; position:absolute; inset:0; border-radius:50%;
+  border:1px solid var(--line-2)}
+.hint__dot::after{content:""; position:absolute; left:50%; top:50%; width:6px; height:6px;
+  margin:-3px 0 0 -3px; border-radius:50%; background:var(--amber);
+  box-shadow:0 0 14px 3px rgba(255,157,60,.8); animation:pulse 2.6s var(--ease) infinite}
+@keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(2.1);opacity:.35}}
+
+/* staggered fade-up */
+@keyframes fadeUp{from{opacity:0;transform:translateY(26px)}to{opacity:1;transform:none}}
+.anim{opacity:0; animation:fadeUp 1s var(--ease-out) both; animation-delay:var(--d,0s)}
+
+/* ============================================================
+   SECTIONS
+   ============================================================ */
+.section{padding:clamp(80px,12vh,170px) var(--pad); position:relative}
+.section__head{
+  display:flex; align-items:baseline; justify-content:space-between;
+  gap:24px; flex-wrap:wrap; margin-bottom:clamp(40px,7vh,80px);
+  padding-bottom:26px; border-bottom:1px solid var(--line);
+}
+.section__head h2{font-family:var(--serif); font-weight:400;
+  font-size:clamp(1.9rem,4vw,3rem); letter-spacing:-.01em}
+.section__head span{font-size:12px; letter-spacing:.18em; text-transform:uppercase; color:var(--faint)}
+
+/* works grid */
+.works{display:grid; grid-template-columns:repeat(3,1fr); gap:clamp(18px,2vw,30px)}
+.work{
+  position:relative; display:flex; flex-direction:column;
+  border:1px solid var(--line); border-radius:4px; overflow:hidden;
+  background:linear-gradient(180deg, rgba(255,255,255,.018), rgba(255,255,255,0));
+  transition:border-color .5s var(--ease), transform .5s var(--ease), background .5s var(--ease);
+}
+.work:hover{transform:translateY(-6px); border-color:var(--line-2);
+  background:linear-gradient(180deg, rgba(255,157,60,.05), rgba(255,255,255,0))}
+.work__art{aspect-ratio:4/3.4; display:grid; place-items:center; padding:34px;
+  color:rgba(236,234,227,.34); border-bottom:1px solid var(--line);
+  transition:color .5s var(--ease)}
+.work:hover .work__art{color:var(--amber-soft)}
+.work__art svg{width:100%; height:100%; overflow:visible}
+.work__body{padding:22px 24px 26px; display:flex; flex-direction:column; gap:8px}
+.work__no{font-size:11px; letter-spacing:.24em; color:var(--faint)}
+.work__title{font-family:var(--serif); font-size:1.7rem; font-weight:500; line-height:1.05}
+.work__meta{display:flex; gap:10px; flex-wrap:wrap; font-size:11.5px;
+  letter-spacing:.12em; text-transform:uppercase; color:var(--muted)}
+.work__meta i{font-style:normal; color:var(--faint)}
+
+/* statement */
+.statement{padding:clamp(90px,15vh,200px) var(--pad); text-align:center}
+.statement p{font-family:var(--serif); font-weight:300;
+  font-size:clamp(1.7rem,4.6vw,3.6rem); line-height:1.22; letter-spacing:-.01em;
+  max-width:20ch; margin:0 auto; text-wrap:balance}
+.statement p em{font-style:italic; color:var(--amber-soft)}
+.statement .by{display:block; margin-top:30px; font-family:var(--sans);
+  font-size:11px; letter-spacing:.24em; text-transform:uppercase; color:var(--faint)}
+
+/* stats */
+.stats{display:grid; grid-template-columns:repeat(4,1fr); gap:1px;
+  background:var(--line); border:1px solid var(--line); border-radius:4px; overflow:hidden}
+.stat{background:var(--ink); padding:clamp(28px,4vw,48px) 24px}
+.stat__v{font-family:var(--serif); font-weight:400; font-size:clamp(2.6rem,6vw,4.6rem); line-height:1}
+.stat__l{margin-top:10px; font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--muted)}
+
+/* footer */
+.footer{padding:clamp(80px,12vh,150px) var(--pad) 40px; border-top:1px solid var(--line)}
+.footer__cta{font-family:var(--serif); font-weight:300;
+  font-size:clamp(2.4rem,7vw,5.6rem); line-height:1.04; letter-spacing:-.01em; max-width:16ch}
+.footer__cta a{color:var(--amber-soft); transition:opacity .3s var(--ease)}
+.footer__cta a:hover{opacity:.7}
+.footer__grid{display:flex; flex-wrap:wrap; gap:30px 60px; justify-content:space-between;
+  margin-top:clamp(50px,8vh,90px); padding-top:34px; border-top:1px solid var(--line)}
+.footer__col h4{font-size:11px; letter-spacing:.2em; text-transform:uppercase; color:var(--faint); margin-bottom:14px}
+.footer__col p, .footer__col a{font-size:13.5px; color:var(--muted); display:block; line-height:1.9}
+.footer__col a:hover{color:var(--paper)}
+.footer__base{display:flex; flex-wrap:wrap; gap:14px 30px; justify-content:space-between;
+  margin-top:60px; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--faint)}
+
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+@media (max-width:900px){
+  .nav__links, .nav__cta{display:none}
+  .nav__toggle{display:block}
+  .works{grid-template-columns:1fr}
+  .stats{grid-template-columns:repeat(2,1fr)}
+}
+@media (max-width:560px){
+  .hero{padding-top:120px}
+  .hint{display:none}
+  .hero__row{margin-top:30px}
+}
+@media (max-width:380px){
+  .stats{grid-template-columns:1fr}
+}
+
+@media (prefers-reduced-motion:reduce){
+  .anim{animation:none !important; opacity:1 !important; transform:none !important}
+  .hint__dot::after{animation:none !important}
+  .overlay a{transition:opacity .2s linear !important; transform:none !important}
+}
+</style>
+</head>
+<body>
+
+<div class="vignette" aria-hidden="true"></div>
+<canvas id="trail" aria-hidden="true"></canvas>
+
+<!-- ===================== NAV ===================== -->
+<header class="nav" id="nav">
+  <a class="brand" href="#top" aria-label="Meridian home"><b>MERIDIAN</b></a>
+  <nav class="nav__links" aria-label="Primary">
+    <a class="nav__link" href="#work">Work</a>
+    <a class="nav__link" href="#">Studio</a>
+    <a class="nav__link" href="#">Approach</a>
+    <a class="nav__link" href="#">Journal</a>
+  </nav>
+  <a class="nav__cta" href="#contact">Start a project</a>
+  <button class="nav__toggle" id="navToggle" aria-label="Open menu" aria-controls="overlay" aria-expanded="false">
+    <span></span><span></span><span></span>
+  </button>
+</header>
+
+<div class="overlay" id="overlay" role="dialog" aria-modal="true" aria-label="Menu">
+  <a href="#work">Work</a>
+  <a href="#">Studio</a>
+  <a href="#">Approach</a>
+  <a href="#">Journal</a>
+  <a href="#contact">Contact</a>
+</div>
+
+<main id="top">
+
+  <!-- ===================== HERO ===================== -->
+  <section class="hero" aria-label="Meridian — architecture studio">
+    <p class="hero__eyebrow eyebrow anim" style="--d:.05s">Meridian — Architecture Studio · Copenhagen / Lisbon</p>
+    <h1 class="hero__title anim" style="--d:.18s">We shape <em>light</em> into living space.</h1>
+    <div class="hero__row">
+      <p class="hero__lead anim" style="--d:.42s">
+        Meridian is an architecture and spatial design practice working across residential,
+        cultural, and civic projects — from the first drawn line to the last fall of light.
+      </p>
+      <div class="hint anim" style="--d:.6s" aria-hidden="true">
+        <span class="hint__dot"></span>
+        Move your cursor — drag to trace the light
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== WORK ===================== -->
+  <section class="section" id="work">
+    <div class="section__head">
+      <h2>Selected Works</h2>
+      <span>Index — 2022 / 2024</span>
+    </div>
+    <div class="works">
+      <!-- 01 — cantilevered house -->
+      <article class="work">
+        <div class="work__art">
+          <svg viewBox="0 0 200 170" fill="none" stroke="currentColor" stroke-width="1.4">
+            <path d="M20 60 H150 V78 H40 V96 H170 V114 H30 V150"/>
+            <path d="M150 60 V42 H110"/>
+            <line x1="10" y1="150" x2="190" y2="150"/>
+            <line x1="40" y1="78" x2="40" y2="96"/>
+            <line x1="170" y1="96" x2="170" y2="114"/>
+          </svg>
+        </div>
+        <div class="work__body">
+          <span class="work__no">01</span>
+          <h3 class="work__title">Hólmar House</h3>
+          <div class="work__meta"><span>Reykjavík</span><i>/</i><span>Residential</span><i>/</i><span>2024</span></div>
+        </div>
+      </article>
+      <!-- 02 — pavilion / vaults -->
+      <article class="work">
+        <div class="work__art">
+          <svg viewBox="0 0 200 170" fill="none" stroke="currentColor" stroke-width="1.4">
+            <path d="M20 140 V70 A30 30 0 0 1 80 70 V140"/>
+            <path d="M80 140 V70 A30 30 0 0 1 140 70 V140"/>
+            <path d="M140 140 V70 A30 30 0 0 1 180 78"/>
+            <line x1="10" y1="140" x2="190" y2="140"/>
+            <line x1="50" y1="40" x2="50" y2="70" stroke-dasharray="3 4"/>
+          </svg>
+        </div>
+        <div class="work__body">
+          <span class="work__no">02</span>
+          <h3 class="work__title">Solenne Pavilion</h3>
+          <div class="work__meta"><span>Lisbon</span><i>/</i><span>Cultural</span><i>/</i><span>2023</span></div>
+        </div>
+      </article>
+      <!-- 03 — tower grid -->
+      <article class="work">
+        <div class="work__art">
+          <svg viewBox="0 0 200 170" fill="none" stroke="currentColor" stroke-width="1.4">
+            <rect x="70" y="22" width="60" height="128"/>
+            <line x1="70" y1="48" x2="130" y2="48"/><line x1="70" y1="74" x2="130" y2="74"/>
+            <line x1="70" y1="100" x2="130" y2="100"/><line x1="70" y1="126" x2="130" y2="126"/>
+            <line x1="100" y1="22" x2="100" y2="150"/>
+            <line x1="40" y1="150" x2="160" y2="150"/>
+            <path d="M70 22 L100 8 L130 22"/>
+          </svg>
+        </div>
+        <div class="work__body">
+          <span class="work__no">03</span>
+          <h3 class="work__title">Atrium Nord</h3>
+          <div class="work__meta"><span>Copenhagen</span><i>/</i><span>Civic</span><i>/</i><span>2022</span></div>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ===================== STATEMENT ===================== -->
+  <section class="statement">
+    <p>Every project begins as a single line — and resolves into <em>light moving through space.</em></p>
+    <span class="by">Meridian — on practice</span>
+  </section>
+
+  <!-- ===================== STATS ===================== -->
+  <section class="section" style="padding-top:0">
+    <div class="stats">
+      <div class="stat"><div class="stat__v">14</div><div class="stat__l">Years</div></div>
+      <div class="stat"><div class="stat__v">60+</div><div class="stat__l">Projects</div></div>
+      <div class="stat"><div class="stat__v">09</div><div class="stat__l">Awards</div></div>
+      <div class="stat"><div class="stat__v">05</div><div class="stat__l">Cities</div></div>
+    </div>
+  </section>
+
+  <!-- ===================== FOOTER ===================== -->
+  <footer class="footer" id="contact">
+    <h2 class="footer__cta">Let's build something that lasts — <a href="mailto:hello@meridian.studio">hello@meridian.studio</a></h2>
+    <div class="footer__grid">
+      <div class="footer__col">
+        <h4>Studio</h4>
+        <p>Refshalevej 163A</p><p>1432 Copenhagen, DK</p>
+      </div>
+      <div class="footer__col">
+        <h4>Enquiries</h4>
+        <a href="mailto:hello@meridian.studio">hello@meridian.studio</a>
+        <a href="tel:+4500000000">+45 00 00 00 00</a>
+      </div>
+      <div class="footer__col">
+        <h4>Follow</h4>
+        <a href="#">Instagram</a><a href="#">LinkedIn</a><a href="#">Journal</a>
+      </div>
+    </div>
+    <div class="footer__base">
+      <span>© 2026 Meridian Studio</span>
+      <span>Copenhagen / Lisbon</span>
+      <span>Light · Structure · Space</span>
+    </div>
+  </footer>
+</main>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---------- NAV: scroll state + mobile menu ---------- */
+  var nav = document.getElementById("nav");
+  function onScroll(){ nav.classList.toggle("is-scrolled", window.scrollY > 12); }
+  onScroll();
+  window.addEventListener("scroll", onScroll, {passive:true});
+
+  var toggle = document.getElementById("navToggle");
+  var overlay = document.getElementById("overlay");
+  function setMenu(open){
+    document.body.classList.toggle("menu-open", open);
+    document.body.classList.toggle("is-locked", open);
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    toggle.setAttribute("aria-label", open ? "Close menu" : "Open menu");
+  }
+  toggle.addEventListener("click", function(){ setMenu(!document.body.classList.contains("menu-open")); });
+  overlay.addEventListener("click", function(e){ if(e.target.tagName === "A") setMenu(false); });
+  document.addEventListener("keydown", function(e){
+    if(e.key === "Escape" && document.body.classList.contains("menu-open")) setMenu(false);
+  });
+  window.addEventListener("resize", function(){
+    if(window.innerWidth > 900 && document.body.classList.contains("menu-open")) setMenu(false);
+  });
+
+  /* ============================================================
+     LIGHT TRAIL
+     A glowing rail that follows the cursor (mouse/pen) or the
+     finger (touch) and fades out. Per-pointer trails so multiple
+     fingers each draw their own rail and never connect.
+     ============================================================ */
+  var canvas = document.getElementById("trail");
+  var ctx = canvas.getContext("2d");
+  var W = 0, H = 0, DPR = 1;
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var LIFE = reduce ? 260 : 720;        // ms a point stays lit before it fades
+  var MAXPTS = 110;
+
+  function resize(){
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * DPR; canvas.height = H * DPR;
+    canvas.style.width = W + "px"; canvas.style.height = H + "px";
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  resize();
+  window.addEventListener("resize", resize);
+
+  // id -> array of {x,y,t}
+  var trails = new Map();
+  function now(){ return performance.now(); }
+
+  function addPoint(id, x, y){
+    var tr = trails.get(id);
+    if(!tr){ tr = []; trails.set(id, tr); }
+    var t = now();
+    var last = tr[tr.length - 1];
+    // skip near-duplicates so the rail stays smooth and cheap
+    if(last && (x - last.x) * (x - last.x) + (y - last.y) * (y - last.y) < 4) return;
+    tr.push({x:x, y:y, t:t});
+    if(tr.length > MAXPTS) tr.shift();
+  }
+
+  /* --- input: touch takes over once a finger is used --- */
+  var usingTouch = false;
+
+  window.addEventListener("pointermove", function(e){
+    if(usingTouch && e.pointerType === "touch") return;
+    addPoint(e.pointerType === "mouse" ? "m" : "p" + e.pointerId, e.clientX, e.clientY);
+  }, {passive:true});
+  window.addEventListener("pointerdown", function(e){
+    if(usingTouch && e.pointerType === "touch") return;
+    addPoint(e.pointerType === "mouse" ? "m" : "p" + e.pointerId, e.clientX, e.clientY);
+  }, {passive:true});
+
+  // Touch handlers keep drawing even while the page scrolls (no preventDefault).
+  function handleTouch(e){
+    usingTouch = true;
+    for(var i = 0; i < e.touches.length; i++){
+      var t = e.touches[i];
+      addPoint("t" + t.identifier, t.clientX, t.clientY);
+    }
+  }
+  window.addEventListener("touchstart", handleTouch, {passive:true});
+  window.addEventListener("touchmove",  handleTouch, {passive:true});
+
+  /* --- render loop --- */
+  function frame(){
+    var t = now();
+    ctx.clearRect(0, 0, W, H);
+    ctx.globalCompositeOperation = "lighter";   // additive: overlaps bloom
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    trails.forEach(function(tr, id){
+      while(tr.length && t - tr[0].t > LIFE) tr.shift();
+      if(tr.length < 2){ if(!tr.length) trails.delete(id); return; }
+
+      for(var i = 1; i < tr.length; i++){
+        var p0 = tr[i-1], p1 = tr[i];
+        var k = 1 - (t - p1.t) / LIFE;          // 1 = fresh, 0 = gone
+        if(k <= 0) continue;
+        var seg = i / tr.length;                // taper toward the tail
+        var w = k * seg;
+
+        // soft outer glow (amber)
+        ctx.strokeStyle = "rgba(255,150,70," + (0.14 * k) + ")";
+        ctx.lineWidth = 26 * w + 2;
+        ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
+
+        // warm mid
+        ctx.strokeStyle = "rgba(255,196,120," + (0.5 * k) + ")";
+        ctx.lineWidth = 9 * w + 1.2;
+        ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
+
+        // bright core
+        ctx.strokeStyle = "rgba(255,248,238," + (0.95 * k) + ")";
+        ctx.lineWidth = 2.4 * w + 0.5;
+        ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
+      }
+
+      // bright head at the most recent point (the "light source")
+      var head = tr[tr.length - 1];
+      var r = reduce ? 14 : 24;
+      var g = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, r);
+      g.addColorStop(0,   "rgba(255,244,225,.55)");
+      g.addColorStop(0.4, "rgba(255,160,80,.24)");
+      g.addColorStop(1,   "rgba(255,160,80,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(head.x, head.y, r, 0, Math.PI * 2); ctx.fill();
+    });
+
+    ctx.globalCompositeOperation = "source-over";
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
