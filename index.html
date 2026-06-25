@@ -529,24 +529,16 @@ body.menu-open .overlay a:nth-child(5){transition-delay:.38s}
   window.addEventListener("touchstart", handleTouch, {passive:true});
   window.addEventListener("touchmove",  handleTouch, {passive:true});
 
-  /* --- one smooth quadratic piece, drawn as three light layers --- */
-  function drawPiece(sx,sy, cx,cy, ex,ey, k, w){
-    ctx.strokeStyle = "rgba(255,150,70," + (0.14 * k) + ")";   // soft outer glow
-    ctx.lineWidth = 26 * w + 2;
-    ctx.beginPath(); ctx.moveTo(sx,sy); ctx.quadraticCurveTo(cx,cy, ex,ey); ctx.stroke();
-    ctx.strokeStyle = "rgba(255,196,120," + (0.5 * k) + ")";   // warm mid
-    ctx.lineWidth = 9 * w + 1.2;
-    ctx.beginPath(); ctx.moveTo(sx,sy); ctx.quadraticCurveTo(cx,cy, ex,ey); ctx.stroke();
-    ctx.strokeStyle = "rgba(255,248,238," + (0.95 * k) + ")";  // bright core
-    ctx.lineWidth = 2.4 * w + 0.5;
-    ctx.beginPath(); ctx.moveTo(sx,sy); ctx.quadraticCurveTo(cx,cy, ex,ey); ctx.stroke();
-  }
-
-  /* --- render loop --- */
+  /* --- render loop ---
+     The rail is ONE continuous smooth path (quadratic curves through the
+     midpoints of consecutive points) stroked as three light layers. Its
+     brightness is a tail->head opacity gradient, so the rail tapers by
+     fading out — there are NO per-point line caps, so it can never look
+     like a string of dots, only a smooth continuous line. ------------- */
   function frame(){
     var t = now();
     ctx.clearRect(0, 0, W, H);
-    ctx.globalCompositeOperation = "lighter";   // additive: overlaps bloom
+    ctx.globalCompositeOperation = "lighter";   // additive glow
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
@@ -555,35 +547,41 @@ body.menu-open .overlay a:nth-child(5){transition-delay:.38s}
       var len = tr.length;
       if(len < 2){ if(!len) trails.delete(id); return; }
 
-      // Smooth the rail with quadratic curves through the midpoints of
-      // consecutive points. Adjacent curves share a midpoint AND tangent,
-      // so the whole trail is C1-continuous — no visible corners/vertices.
-      if(len === 2){
-        var a = tr[0], b = tr[1], k2 = 1 - (t - b.t) / LIFE;
-        if(k2 > 0) drawPiece(a.x,a.y, (a.x+b.x)/2,(a.y+b.y)/2, b.x,b.y, k2, k2);
-      } else {
-        for(var i = 1; i < len; i++){
-          var p = tr[i], prev = tr[i-1], next = tr[i+1];
-          var k = 1 - (t - p.t) / LIFE;         // freshness of this control point
-          if(k <= 0) continue;
-          var w = k * (i / len);                // taper toward the tail
-          var sx = (prev.x + p.x) / 2, sy = (prev.y + p.y) / 2;   // start: midpoint behind
-          var ex, ey;
-          if(next){ ex = (p.x + next.x) / 2; ey = (p.y + next.y) / 2; }  // end: midpoint ahead
-          else    { ex = p.x; ey = p.y; }                               // last piece reaches the head
-          if(i === 1){ sx = prev.x; sy = prev.y; }                      // first piece starts at the tail
-          drawPiece(sx,sy, p.x,p.y, ex,ey, k, w);
-        }
-      }
+      var head = tr[len - 1], tail = tr[0];
+      var hk = 1 - (t - head.t) / LIFE;          // overall freshness: dims as it ages once you stop
+      if(hk <= 0){ return; }
+      var ramp = 0.4 + 0.6 * hk;                 // ease the width down as the rail fades
 
-      // bright head bloom at the most recent point (the "light source")
-      var head = tr[len - 1];
+      // Build the smooth path ONCE (single continuous stroke = no internal caps).
+      ctx.beginPath();
+      ctx.moveTo(tr[0].x, tr[0].y);
+      for(var i = 1; i < len - 1; i++){
+        var mx = (tr[i].x + tr[i+1].x) / 2, my = (tr[i].y + tr[i+1].y) / 2;
+        ctx.quadraticCurveTo(tr[i].x, tr[i].y, mx, my);
+      }
+      ctx.quadraticCurveTo(tr[len-1].x, tr[len-1].y, tr[len-1].x, tr[len-1].y);
+
+      // Stroke 3 layers; opacity ramps transparent (tail) -> bright (head).
+      function layer(col, aHead, width){
+        var g = ctx.createLinearGradient(tail.x, tail.y, head.x, head.y);
+        g.addColorStop(0,    "rgba(" + col + ",0)");
+        g.addColorStop(0.30, "rgba(" + col + "," + (aHead * 0.22 * hk) + ")");
+        g.addColorStop(1,    "rgba(" + col + "," + (aHead * hk) + ")");
+        ctx.strokeStyle = g;
+        ctx.lineWidth = width * ramp;
+        ctx.stroke();
+      }
+      layer("255,150,70",  0.5,  26);   // soft outer glow
+      layer("255,196,120", 0.55, 10);   // warm mid
+      layer("255,248,238", 0.95, 2.8);  // bright core
+
+      // bright head bloom (the "light source")
       var r = reduce ? 14 : 24;
-      var g = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, r);
-      g.addColorStop(0,   "rgba(255,244,225,.55)");
-      g.addColorStop(0.4, "rgba(255,160,80,.24)");
-      g.addColorStop(1,   "rgba(255,160,80,0)");
-      ctx.fillStyle = g;
+      var bg = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, r);
+      bg.addColorStop(0,   "rgba(255,244,225," + (0.55 * hk) + ")");
+      bg.addColorStop(0.4, "rgba(255,160,80," + (0.24 * hk) + ")");
+      bg.addColorStop(1,   "rgba(255,160,80,0)");
+      ctx.fillStyle = bg;
       ctx.beginPath(); ctx.arc(head.x, head.y, r, 0, Math.PI * 2); ctx.fill();
     });
 
