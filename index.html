@@ -457,7 +457,9 @@ body.menu-open .overlay a:nth-child(5){transition-delay:.38s}
   var W = 0, H = 0, DPR = 1;
   var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   var LIFE = reduce ? 260 : 720;        // ms a point stays lit before it fades
-  var MAXPTS = 110;
+  var MAXPTS = 260;
+  var GAP = 14;                         // max spacing between points (px); larger gaps get interpolated
+  var TELEPORT = 180;                   // a jump bigger than this starts a fresh stroke (no rubber-band line)
 
   function resize(){
     DPR = Math.min(window.devicePixelRatio || 1, 2);
@@ -478,22 +480,42 @@ body.menu-open .overlay a:nth-child(5){transition-delay:.38s}
     if(!tr){ tr = []; trails.set(id, tr); }
     var t = now();
     var last = tr[tr.length - 1];
-    // skip near-duplicates so the rail stays smooth and cheap
-    if(last && (x - last.x) * (x - last.x) + (y - last.y) * (y - last.y) < 4) return;
+    if(last){
+      var dx = x - last.x, dy = y - last.y, d2 = dx*dx + dy*dy;
+      if(d2 < 4) return;                          // ignore micro-jitter
+      if(d2 > TELEPORT*TELEPORT){                 // big jump (pointer re-enter): start a fresh stroke
+        tr.length = 0;
+      } else if(d2 > GAP*GAP){                     // fill long gaps so the curve stays dense + smooth
+        var d = Math.sqrt(d2), steps = Math.min(12, (d / GAP) | 0);
+        for(var s = 1; s < steps; s++){
+          var f = s / steps;
+          tr.push({x: last.x + dx*f, y: last.y + dy*f, t: t});
+        }
+      }
+    }
     tr.push({x:x, y:y, t:t});
-    if(tr.length > MAXPTS) tr.shift();
+    while(tr.length > MAXPTS) tr.shift();
   }
 
   /* --- input: touch takes over once a finger is used --- */
   var usingTouch = false;
 
+  function pid(e){ return e.pointerType === "mouse" ? "m" : "p" + e.pointerId; }
   window.addEventListener("pointermove", function(e){
     if(usingTouch && e.pointerType === "touch") return;
-    addPoint(e.pointerType === "mouse" ? "m" : "p" + e.pointerId, e.clientX, e.clientY);
+    var id = pid(e);
+    // Coalesced events expose every sample the browser captured between
+    // frames — far denser than one event per move, so the rail is smooth.
+    var evs = e.getCoalescedEvents ? e.getCoalescedEvents() : null;
+    if(evs && evs.length){
+      for(var i = 0; i < evs.length; i++) addPoint(id, evs[i].clientX, evs[i].clientY);
+    } else {
+      addPoint(id, e.clientX, e.clientY);
+    }
   }, {passive:true});
   window.addEventListener("pointerdown", function(e){
     if(usingTouch && e.pointerType === "touch") return;
-    addPoint(e.pointerType === "mouse" ? "m" : "p" + e.pointerId, e.clientX, e.clientY);
+    addPoint(pid(e), e.clientX, e.clientY);
   }, {passive:true});
 
   // Touch handlers keep drawing even while the page scrolls (no preventDefault).
@@ -507,6 +529,19 @@ body.menu-open .overlay a:nth-child(5){transition-delay:.38s}
   window.addEventListener("touchstart", handleTouch, {passive:true});
   window.addEventListener("touchmove",  handleTouch, {passive:true});
 
+  /* --- one smooth quadratic piece, drawn as three light layers --- */
+  function drawPiece(sx,sy, cx,cy, ex,ey, k, w){
+    ctx.strokeStyle = "rgba(255,150,70," + (0.14 * k) + ")";   // soft outer glow
+    ctx.lineWidth = 26 * w + 2;
+    ctx.beginPath(); ctx.moveTo(sx,sy); ctx.quadraticCurveTo(cx,cy, ex,ey); ctx.stroke();
+    ctx.strokeStyle = "rgba(255,196,120," + (0.5 * k) + ")";   // warm mid
+    ctx.lineWidth = 9 * w + 1.2;
+    ctx.beginPath(); ctx.moveTo(sx,sy); ctx.quadraticCurveTo(cx,cy, ex,ey); ctx.stroke();
+    ctx.strokeStyle = "rgba(255,248,238," + (0.95 * k) + ")";  // bright core
+    ctx.lineWidth = 2.4 * w + 0.5;
+    ctx.beginPath(); ctx.moveTo(sx,sy); ctx.quadraticCurveTo(cx,cy, ex,ey); ctx.stroke();
+  }
+
   /* --- render loop --- */
   function frame(){
     var t = now();
@@ -517,33 +552,32 @@ body.menu-open .overlay a:nth-child(5){transition-delay:.38s}
 
     trails.forEach(function(tr, id){
       while(tr.length && t - tr[0].t > LIFE) tr.shift();
-      if(tr.length < 2){ if(!tr.length) trails.delete(id); return; }
+      var len = tr.length;
+      if(len < 2){ if(!len) trails.delete(id); return; }
 
-      for(var i = 1; i < tr.length; i++){
-        var p0 = tr[i-1], p1 = tr[i];
-        var k = 1 - (t - p1.t) / LIFE;          // 1 = fresh, 0 = gone
-        if(k <= 0) continue;
-        var seg = i / tr.length;                // taper toward the tail
-        var w = k * seg;
-
-        // soft outer glow (amber)
-        ctx.strokeStyle = "rgba(255,150,70," + (0.14 * k) + ")";
-        ctx.lineWidth = 26 * w + 2;
-        ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
-
-        // warm mid
-        ctx.strokeStyle = "rgba(255,196,120," + (0.5 * k) + ")";
-        ctx.lineWidth = 9 * w + 1.2;
-        ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
-
-        // bright core
-        ctx.strokeStyle = "rgba(255,248,238," + (0.95 * k) + ")";
-        ctx.lineWidth = 2.4 * w + 0.5;
-        ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
+      // Smooth the rail with quadratic curves through the midpoints of
+      // consecutive points. Adjacent curves share a midpoint AND tangent,
+      // so the whole trail is C1-continuous — no visible corners/vertices.
+      if(len === 2){
+        var a = tr[0], b = tr[1], k2 = 1 - (t - b.t) / LIFE;
+        if(k2 > 0) drawPiece(a.x,a.y, (a.x+b.x)/2,(a.y+b.y)/2, b.x,b.y, k2, k2);
+      } else {
+        for(var i = 1; i < len; i++){
+          var p = tr[i], prev = tr[i-1], next = tr[i+1];
+          var k = 1 - (t - p.t) / LIFE;         // freshness of this control point
+          if(k <= 0) continue;
+          var w = k * (i / len);                // taper toward the tail
+          var sx = (prev.x + p.x) / 2, sy = (prev.y + p.y) / 2;   // start: midpoint behind
+          var ex, ey;
+          if(next){ ex = (p.x + next.x) / 2; ey = (p.y + next.y) / 2; }  // end: midpoint ahead
+          else    { ex = p.x; ey = p.y; }                               // last piece reaches the head
+          if(i === 1){ sx = prev.x; sy = prev.y; }                      // first piece starts at the tail
+          drawPiece(sx,sy, p.x,p.y, ex,ey, k, w);
+        }
       }
 
-      // bright head at the most recent point (the "light source")
-      var head = tr[tr.length - 1];
+      // bright head bloom at the most recent point (the "light source")
+      var head = tr[len - 1];
       var r = reduce ? 14 : 24;
       var g = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, r);
       g.addColorStop(0,   "rgba(255,244,225,.55)");
